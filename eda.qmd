@@ -1,0 +1,7 @@
+---
+title: "Project 2 Static EDA"
+format: html
+editor: visual
+author: "Ryan Mersereau"
+---
+
