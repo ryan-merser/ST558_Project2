@@ -42,6 +42,9 @@ read_season_shots <- function(file) {
   read_csv(file, col_select = all_of(keep_cols), col_types = col_spec) |>
     # keep only field-goal attempts (free throws are recorded separately)
     filter(!is.na(Shooter), !is.na(ShotType)) |>
+    # drop the ~20 "3-pt layup" / "3-pt hook shot" rows, which are
+    # recording errors (a layup or hook can't be taken from 3-pt range)
+    filter(!ShotType %in% c("3-pt layup", "3-pt hook shot")) |>
     mutate(season = season_label)
 }
 
@@ -67,7 +70,12 @@ shots <- shots_raw |>
     # shot attributes
     shot_value = if_else(str_detect(ShotType, "^3"), "3-pt", "2-pt"),
     points     = if_else(shot_value == "3-pt", 3L, 2L),
-    shot_kind  = ShotType |> str_remove("^[23]-pt ") |> str_to_title(),
+    # tip-ins (only 3 shots) are folded into layups so tables have no
+    # near-empty level
+    shot_kind  = ShotType |>
+      str_remove("^[23]-pt ") |>
+      str_replace("tip-in", "layup") |>
+      str_to_title(),
     made       = ShotOutcome == "make",
     outcome    = if_else(made, "Make", "Miss"),
     assisted   = if_else(!is.na(Assister), "Assisted", "Unassisted"),
@@ -87,11 +95,16 @@ shots <- shots_raw |>
     score_margin = margin_after - if_else(made, points, 0L),
     
     game_type = str_to_title(GameType),
-    game_date = mdy(Date)
+    game_date = mdy(Date),
+    
+    # Shooter looks like "A. Drummond - drumman01": split the display name
+    # from the unique player ID (names like "M. Morris" are not unique)
+    shooter    = str_remove(Shooter, " - .*$"),
+    shooter_id = str_extract(Shooter, "(?<= - ).+$")
   ) |>
   select(
     season, game_id = URL, game_date, game_type, period, sec_left_period,
-    shooting_team, opponent, shooting_side, shooter = Shooter,
+    shooting_team, opponent, shooting_side, shooter, shooter_id,
     shot_value, shot_kind, shot_dist = ShotDist, outcome, made,
     assisted, blocked, score_margin
   ) |>

@@ -1,7 +1,112 @@
 ---
 title: "Project 2 Static EDA"
-format: html
-editor: visual
 author: "Ryan Mersereau"
+format:
+  html:
+    toc: true
+    code-fold: show
+editor: visual
+execute:
+  warning: false
+  message: false
 ---
 
+## Purpose
+
+This file explores the NBA shot data in a static way before it goes into the Shiny app. Everything here (the contingency tables, grouped numeric summaries, and plots) is something the app's Data Exploration tab will let the user recreate on a subset of their choosing.
+
+## Data
+
+The data come from the [NBA Play-by-Play Data](https://www.kaggle.com/datasets/schmadam97/nba-playbyplay-data-20182019) set on Kaggle, which records every play of every game scraped from Basketball-Reference. `data_prep.R` reduces the five full seasons from 2015-16 through 2019-20 to one row per **field-goal attempt**, keeps the useful columns, and adds derived variables such as shot value, shot kind, and the score margin from the shooting team's point of view.
+
+```{r}
+#| label: setup
+#| warning: FALSE
+#| message: FALSE
+
+library(tidyverse)
+library(scales)
+library(knitr)
+
+shots <- read_rds("data/nba_shots.rds")
+
+glimpse(shots)
+```
+
+The variables used below are:
+
+| Variable | Type | Description |
+|-----------------------|-----------------------|---------------------------|
+| `season` | categorical | Season, 2015-16 to 2019-20 |
+| `game_type` | categorical | Regular season or playoff game |
+| `period` | categorical | Q1–Q4, with all overtimes grouped as OT |
+| `shooting_side` | categorical | Whether the shooting team was home or away |
+| `shot_value` | categorical | 2-pt or 3-pt attempt |
+| `shot_kind` | categorical | Jump shot, layup, dunk, or hook shot |
+| `outcome` | categorical | Make or miss |
+| `assisted` | categorical | Whether the shot was assisted |
+| `shooting_team` | categorical | Team taking the shot (30 levels) |
+| `shot_dist` | numeric | Shot distance in feet |
+| `score_margin` | numeric | Shooting team's lead (negative = trailing) before the shot |
+| `sec_left_period` | numeric | Seconds left in the period |
+
+## Contingency Tables
+
+### One-way tables
+
+How shot attempts are split across shot kinds and periods.
+
+```{r}
+#| label: one-way-tables
+
+table(shots$shot_kind)
+
+table(shots$period)
+```
+
+The same counts as proportions make the shot mix easier to read.
+
+```{r}
+#| label: one-way-props
+
+shots |>
+  count(shot_kind, sort = TRUE) |>
+  mutate(proportion = round(n / sum(n), 3)) |>
+  kable(col.names = c("Shot kind", "Attempts", "Proportion"))
+```
+
+### Two-way tables
+
+Shot kind by outcome, followed by the row proportions (the FG% of each shot kind).
+
+```{r}
+#| label: two-way-kind-outcome
+
+kind_outcome <- table(shots$shot_kind, shots$outcome)
+kind_outcome
+
+round(prop.table(kind_outcome, margin = 1), 3)
+```
+
+Season by shot value, showing how the share of attempts that are threes changes over time.
+
+```{r}
+#| label: two-way-season-value
+
+season_value <- table(shots$season, shots$shot_value)
+season_value
+
+round(prop.table(season_value, margin = 1), 3)
+```
+
+Whether a made shot was assisted, by shot kind (made shots only, since misses can't be assisted).
+
+```{r}
+#| label: two-way-assisted
+
+shots_made <- shots |>
+  filter(made)
+
+round(prop.table(table(shots_made$shot_kind, shots_made$assisted),
+                 margin = 1), 3)
+```
