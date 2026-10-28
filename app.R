@@ -88,17 +88,71 @@ app_sidebar <- sidebar(
 
 about_tab <- nav_panel(
   "About",
-  p(" ")
+  layout_columns(
+    col_widths = c(7, 5),
+    card(
+      card_header("About this app"),
+      h4("Purpose"),
+      p("NBA Shot Explorer lets you dig into every field-goal attempt from",
+        "five NBA seasons (2015-16 through 2019-20), a little over one million",
+        "shots. You can see how the league's shot mix changed during the",
+        "three-point boom, how shooting accuracy depends on distance and shot",
+        "type, and how teams differ from one another."),
+      h4("The data"),
+      p("The data come from the",
+        a("NBA Play-by-Play Data",
+          href = "https://www.kaggle.com/datasets/schmadam97/nba-playbyplay-data-20182019",
+          target = "_blank"),
+        "set on Kaggle, which was scraped from",
+        a("Basketball-Reference", href = "https://www.basketball-reference.com",
+          target = "_blank"),
+        "and records every play of every game. The raw play-by-play was",
+        "reduced to one row per field-goal attempt (free throws are not",
+        "included), with variables describing the shot (distance, 2 or 3",
+        "points, kind of shot, make or miss, assisted) and the game situation",
+        "(season, regular season or playoffs, period, time left, and the",
+        "shooting team's lead or deficit before the shot)."),
+      h4("How to use the app"),
+      tags$ul(
+        tags$li(strong("Sidebar: "),
+                "choose a season, team, game type and shot value, then pick",
+                "up to two numeric variables and drag their sliders to set a",
+                "range. Nothing changes until you press", em("Apply filters"),
+                ". Every other tab uses the filtered data."),
+        tags$li(strong("About: "), "this page."),
+        tags$li(strong("Data Download: "),
+                "browse the filtered shots in a table and save them as a",
+                "CSV file."),
+        tags$li(strong("Data Exploration: "),
+                "build your own summaries. The",
+                em("Categorical"), "view gives one- and two-way contingency",
+                "tables with bar charts; the", em("Numeric"),
+                "view gives summary statistics with histograms, density",
+                "plots or box plots; the", em("Shooting by Distance"),
+                "view plots accuracy against distance; and the",
+                em("Heatmap"), "view compares any two categorical variables",
+                "on a metric such as FG% or three-point rate.")
+      )
+    ),
+    card(
+      card_header("Shooting accuracy across the court"),
+      tags$img(src = "court_fg.png", alt = "Half court shaded by FG% at each distance",
+               style = "width: 100%; height: auto;"),
+      p(class = "text-muted small",
+        "Each ring is a one-foot band of distance from the hoop, shaded by",
+        "the league-wide field-goal percentage from that distance.")
+    )
+  )
 )
 
 download_tab <- nav_panel(
   "Data Download",
-  p(" ")
+  p("Coming soon.")
 )
 
 exploration_tab <- nav_panel(
   "Data Exploration",
-  p(" ")
+  p("Coming soon.")
 )
 
 ui <- page_sidebar(
