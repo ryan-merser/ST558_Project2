@@ -13,7 +13,7 @@ execute:
 
 ## Purpose
 
-This file explores the NBA shot data in a static way before it goes into the Shiny app. Everything here (the contingency tables, grouped numeric summaries, and plots) is something the app's Data Exploration tab will let the user recreate on a subset of their choosing.
+This Quarto document explores the NBA shot data in a static way before it goes into the Shiny app. Everything here (the contingency tables, grouped numeric summaries, and plots) is something the app's Data Exploration tab will let the user recreate on a subset of their choosing.
 
 ## Data
 
@@ -35,8 +35,6 @@ glimpse(shots)
 
 The variables used below are:
 
-| Variable | Type | Description |
-|-----------------------|-----------------------|---------------------------|
 | `season` | categorical | Season, 2015-16 to 2019-20 |
 | `game_type` | categorical | Regular season or playoff game |
 | `period` | categorical | Q1–Q4, with all overtimes grouped as OT |
@@ -63,6 +61,8 @@ table(shots$shot_kind)
 
 table(shots$period)
 ```
+Here we can see Jump Shots are the most common shot type, followed by layups. The quarter with the most shot volume is
+Quarter 1
 
 The same counts as proportions make the shot mix easier to read.
 
@@ -74,6 +74,8 @@ shots |>
   mutate(proportion = round(n / sum(n), 3)) |>
   kable(col.names = c("Shot kind", "Attempts", "Proportion"))
 ```
+
+Jump shots account for 64.7% of all shots taken for this data, with layups accounting for 26.5%
 
 ### Two-way tables
 
@@ -87,6 +89,8 @@ kind_outcome
 
 round(prop.table(kind_outcome, margin = 1), 3)
 ```
+On average, 90% of dunks in this data were made. Whereas only 38% of jump shots were made.
+
 
 Season by shot value, showing how the share of attempts that are threes changes over time.
 
@@ -98,6 +102,7 @@ season_value
 
 round(prop.table(season_value, margin = 1), 3)
 ```
+Shot selection changed over time in this data. In 2015, 28% of all shot attempts were 3 pointers, whereas in 2019, this number was up to 38%.
 
 Whether a made shot was assisted, by shot kind (made shots only, since misses can't be assisted).
 
@@ -110,3 +115,253 @@ shots_made <- shots |>
 round(prop.table(table(shots_made$shot_kind, shots_made$assisted),
                  margin = 1), 3)
 ```
+Here we can see 76.3% of dunks from this data were assisted, whereas 47.4% of Layups were assisted
+
+## Numeric Summaries Across Categories
+
+This helper returns summary statistics of one numeric variable at each level of one categorical variable. It takes the variable names as strings, so the same function can be reused in the app with `input$...` values.
+
+```{r}
+#| label: summary-function
+
+summarize_numeric <- function(data, num_var, group_var) {
+  data |>
+    group_by(.data[[group_var]]) |>
+    summarise(
+      n      = n(),
+      mean   = mean(.data[[num_var]], na.rm = TRUE),
+      median = median(.data[[num_var]], na.rm = TRUE),
+      sd     = sd(.data[[num_var]], na.rm = TRUE),
+      q1     = quantile(.data[[num_var]], 0.25, na.rm = TRUE),
+      q3     = quantile(.data[[num_var]], 0.75, na.rm = TRUE),
+      .groups = "drop"
+    ) |>
+    mutate(across(where(is.double), \(x) round(x, 2)))
+}
+```
+
+Shot distance by shot kind:
+
+```{r}
+#| label: summary-dist-kind
+
+summarize_numeric(shots, "shot_dist", "shot_kind") |>
+  kable()
+```
+
+By the nature of the shot, Dunks are only 0.74 feet from the basket, on average. Whereas Jump shots are taken 19.48 feet from the basket, on average.
+
+Shot distance by season:
+
+```{r}
+#| label: summary-dist-season
+
+summarize_numeric(shots, "shot_dist", "season") |>
+  kable()
+```
+
+Over time in this data, shot distance became greater, on average. In 2015, average shot distance
+was 12.5 feet from the basket. In 2019, this average was 14.05 feet.
+
+Score margin by period:
+
+```{r}
+#| label: summary-margin-period
+
+summarize_numeric(shots, "score_margin", "period") |>
+  kable()
+```
+
+The score margin variable is the shooting teams lead when taking the shot (negative means they are trailing). The average score margin for all quarters is negative, leading us to believe the trailing team will take more shots, on average.
+
+Field-goal percentage is the mean of the logical `made` variable. Grouping on two categorical variables at once gives FG% for each shot value in the regular season and the playoffs:
+
+```{r}
+#| label: summary-fg-value-type
+
+shots |>
+  group_by(shot_value, game_type) |>
+  summarise(
+    attempts = n(),
+    fg_pct   = percent(mean(made), accuracy = 0.1),
+    .groups  = "drop"
+  ) |>
+  kable(col.names = c("Shot value", "Game type", "Attempts", "FG%"))
+```
+
+Average playoff shooting accuracy doesn't change much from the regular season for this data, dipping by 0.3 percentage points compared to the regular season for both 2 and 3 pointers
+
+## Plots
+
+### 1. Bar chart: attempts by shot kind
+
+```{r}
+#| label: plot-bar-kind
+
+ggplot(shots, aes(x = fct_infreq(shot_kind))) +
+  geom_bar(fill = "darkblue") +
+  scale_y_continuous(labels = comma) +
+  labs(
+    title = "Field-Goal Attempts by Shot Kind",
+    subtitle = "2015-16 to 2019-20 seasons",
+    x = "Shot kind",
+    y = "Attempts"
+  ) +
+  theme_minimal()
+```
+
+First, a basic bar chart. We can see jump shots are the most common shot type by a large margin, followed by layups, then dunks.
+
+### 2. Side-by-side bar chart: 2s vs 3s by season
+
+```{r}
+#| label: plot-dodge-season
+
+ggplot(shots, aes(x = season, fill = shot_value)) +
+  geom_bar(position = "dodge") +
+  scale_y_continuous(labels = comma) +
+  scale_fill_manual(values = c("2-pt" = "darkblue", "3-pt" = "red")) +
+  labs(
+    title = "2-Point and 3-Point Attempts by Season",
+    x = "Season",
+    y = "Attempts",
+    fill = "Shot value"
+  ) +
+  theme_minimal()
+```
+This side by side bar chart shows the trend seen earlier in numeric summaries, where over the course of this data, players began shooting less 2 point shots, and more 3 point shots.
+
+### 3. Histogram: shot distance by shot value
+
+Distances beyond 40 ft are end-of-quarter heaves and are cut from the plot so the main shape is visible.
+
+```{r}
+#| label: plot-hist-dist
+
+shots |>
+  filter(shot_dist <= 40) |>
+  ggplot(aes(x = shot_dist, fill = shot_value)) +
+  geom_histogram(binwidth = 1, boundary = 0, color = "white", linewidth = 0.1) +
+  scale_y_continuous(labels = comma) +
+  scale_fill_manual(values = c("2-pt" = "#1d428a", "3-pt" = "#c8102e")) +
+  labs(
+    title = "Distribution of Shot Distance",
+    subtitle = "Shots from 40 ft or closer",
+    x = "Shot distance (ft)",
+    y = "Attempts",
+    fill = "Shot value"
+  ) +
+  theme_minimal()
+```
+
+This histogram shows the distribution of shot distance, color coded by shot value. The official NBA 3 point line is at 23 feet (and 9 inches), so any shot beyond that is a 3 point attempt. It's interesting to see the bimodal nature of this data, where players are really prioritizing dunks/layups from a few feet away, or 3 point jump shots from around 23 to 26 feet away.
+
+### 4. Box plot: score margin by period and game type
+
+```{r}
+#| label: plot-box-margin
+
+ggplot(shots, aes(x = period, y = score_margin, fill = game_type)) +
+  geom_boxplot(outlier.alpha = 0.05) +
+  scale_fill_manual(values = c("Regular" = "darkblue", "Playoff" = "gold")) +
+  labs(
+    title = "Score Margin at the Time of the Shot",
+    subtitle = "Positive = shooting team leading",
+    x = "Period",
+    y = "Score margin (points)",
+    fill = "Game type"
+  ) +
+  theme_minimal()
+```
+
+Here are boxplots of scoring margin at the time of shots. In the first quarter, the IQR of the scoring margin is not as large as in the fourth quarter, because there hasn't been enough time for one team to pull ahead.
+
+### 5. Scatter plot: FG% vs distance
+
+Each point is one distance (in feet) for one shot value, sized by how many attempts came from there. Distances with fewer than 100 attempts are left out because their FG% is too noisy.
+
+```{r}
+#| label: plot-scatter-fg
+
+fg_by_dist <- shots |>
+  filter(shot_dist <= 35) |>
+  group_by(shot_dist, shot_value) |>
+  summarise(attempts = n(), fg_pct = mean(made), .groups = "drop") |>
+  filter(attempts >= 100)
+
+ggplot(fg_by_dist, aes(x = shot_dist, y = fg_pct, color = shot_value)) +
+  geom_point(aes(size = attempts), alpha = 0.8) +
+  scale_y_continuous(labels = percent) +
+  scale_size_continuous(labels = comma) +
+  scale_color_manual(values = c("2-pt" = "darkblue", "3-pt" = "red")) +
+  labs(
+    title = "Field-Goal Percentage by Shot Distance",
+    x = "Shot distance (ft)",
+    y = "FG%",
+    color = "Shot value",
+    size = "Attempts"
+  ) +
+  theme_minimal()
+```
+
+This scatter plot with point size equating to number of attempts shows similar findings to the histogram above in plot 3. In terms of FG percentage (accuracy), long two pointers (10-20 feet) are made only slightly more than three pointers. Teams may prioritize three pointers over long twos because the shooters are almost as accurate, and will get an extra point from the shot. 
+
+### 6. Faceted histogram: shot distance by season
+
+The same distribution as plot 3, split by season, shows how the shot profile changes over time.
+
+```{r}
+#| label: plot-facet-season
+#| fig-height: 7
+
+shots |>
+  filter(shot_dist <= 40) |>
+  ggplot(aes(x = shot_dist, fill = shot_value)) +
+  geom_histogram(binwidth = 1, boundary = 0, color = "white", linewidth = 0.1) +
+  facet_wrap(~ season, ncol = 2) +
+  scale_y_continuous(labels = comma) +
+  scale_fill_manual(values = c("2-pt" = "darkblue", "3-pt" = "red")) +
+  labs(
+    title = "Distribution of Shot Distance, Faceted by Season",
+    subtitle = "Shots from 40 ft or closer",
+    x = "Shot distance (ft)",
+    y = "Attempts",
+    fill = "Shot value"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+These faceted histograms show some interesting results. Over the years of this data, the long two (~15 to 20 feet) has essentially been eradicated. In the first histogram (2015), there is a small hump before the three point line, suggesting there were still a group of specialized shooters going for long range twos. Compare this to 2019, and this hump has been smoothed down, suggesting these mid-range shooters have shifted to shooting three pointers more, and long two pointers less.
+
+### 7. Heatmap: 3-point attempt rate by team and season
+
+A plot type where each tile is the share of a team's attempts that were threes in that season.
+
+```{r}
+#| label: plot-heatmap-team
+#| fig-height: 8
+
+three_rate <- shots |>
+  group_by(shooting_team, season) |>
+  summarise(three_rate = mean(shot_value == "3-pt"), .groups = "drop") |>
+  mutate(shooting_team = fct_reorder(shooting_team, three_rate))
+
+ggplot(three_rate, aes(x = season, y = shooting_team, fill = three_rate)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = percent(three_rate, accuracy = 1)), size = 2.8) +
+  scale_fill_gradient(low = "lightgrey", high = "red", labels = percent) +
+  labs(
+    title = "Share of Field-Goal Attempts that were 3-Pointers",
+    subtitle = "Teams ordered by their average 3-point rate",
+    x = "Season",
+    y = "Team",
+    fill = "3PA rate"
+  ) +
+  theme_minimal() +
+  theme(panel.grid = element_blank())
+```
+
+Here is a breakdown of all 30 NBA teams in this data coded by how many of their shot attempts were behind the three point line, by year. We can see almost every team gradually adapted to taking more threes from 2015 to 2020. From 2017 to 2020, the Houston Rockets took three point attempts for over 50% of their total shots! 
+
+Side tangent but at this time Houston revolutionized their offense around taking as many three point attempts as possible, centered around their prolific shooter James Harden. Many other teams followed this strategy, although not to this extreme level, with three point specialists like Steph Curry (GSW), Damian Lillard (POR), and Luka Doncic (DAL) to name a few.
