@@ -77,7 +77,7 @@ filter_numeric <- function(data, var, range) {
 
 # Summary statistics of one numeric variable at each level of a categorical one
 summarize_numeric <- function(data, num_var, group_var) {
-  data |>
+  summary_table <- data |>
     group_by(.data[[group_var]]) |>
     summarise(
       n      = n(),
@@ -89,8 +89,10 @@ summarize_numeric <- function(data, num_var, group_var) {
       q3     = quantile(.data[[num_var]], 0.75, na.rm = TRUE),
       max    = max(.data[[num_var]], na.rm = TRUE),
       .groups = "drop"
-    ) |>
-    rename(!!var_label(group_var) := 1)
+    )
+  # use the readable label as the first column name
+  names(summary_table)[1] <- var_label(group_var)
+  summary_table
 }
 
 # Points scored on each attempt (0 for a miss)
@@ -128,6 +130,15 @@ plot_theme <- theme_minimal(base_size = 14) +
   theme(legend.position = "bottom", plot.title = element_text(face = "bold"))
 
 empty_data_msg <- "No shots match the current filters. Widen the sidebar filters and press Apply."
+
+# ---- Shooting report data -----------------------------------------------------
+# Player ratings and league averages for the Shooting Report tab. The helper
+# functions live in player_report.R.
+
+source("player_report.R")
+
+player_stints <- build_player_stints(shots) |> add_ratings()
+league_zones  <- build_league_zones(shots)
 
 # ---- UI -----------------------------------------------------------------------
 
@@ -186,7 +197,8 @@ about_tab <- nav_panel(
                 "choose a season, team, game type and shot value, then pick",
                 "up to two numeric variables and drag their sliders to set a",
                 "range. Nothing changes until you press", em("Apply filters"),
-                ". Every other tab uses the filtered data."),
+                ". Every tab except the Shooting Report uses the filtered",
+                "data."),
         tags$li(strong("About: "), "this page."),
         tags$li(strong("Data Download: "),
                 "browse the filtered shots in a table and save them as a",
@@ -199,7 +211,14 @@ about_tab <- nav_panel(
                 "plots or box plots; the", em("Shooting by Distance"),
                 "view plots accuracy against distance; and the",
                 em("Heatmap"), "view compares any two categorical variables",
-                "on a metric such as FG% or three-point rate.")
+                "on a metric such as FG% or three-point rate."),
+        tags$li(strong("Shooting Report: "),
+                "pick a season, team and player to get a player card. It",
+                "rates the player's shooting against the rest of the league",
+                "that season, gives a playstyle label based on where he",
+                "shoots, and charts his shot mix next to the league average.",
+                "It uses full regular seasons, so the sidebar filters do not",
+                "apply to it.")
       )
     ),
     card(
@@ -323,6 +342,44 @@ exploration_tab <- nav_panel(
   )
 )
 
+report_tab <- nav_panel(
+  "Shooting Report",
+  tags$head(tags$style(HTML(player_card_css))),
+  layout_sidebar(
+    sidebar = sidebar(
+      width = 260,
+      selectInput("report_season", "Season",
+                  choices = levels(player_stints$season), selected = "2018-19"),
+      selectInput("report_team", "Team",
+                  choices = levels(player_stints$shooting_team),
+                  selected = "GSW"),
+      selectInput("report_player", "Player", choices = NULL),
+      p(class = "text-muted small",
+        "Players are listed by field-goal attempts for that team. This tab",
+        "uses each full regular season and ignores the sidebar filters.")
+    ),
+    uiOutput("player_card"),
+    plotOutput("player_profile", height = "380px") |> withSpinner(),
+    card(
+      card_header("How the ratings work"),
+      p("Each rating is the player's percentile among every player with at",
+        "least", qualify_fga, "field-goal attempts for one team in that",
+        "season (about 300-340 players). Zone ratings use FG% from that zone",
+        "and need a minimum number of attempts there. Efficiency is eFG%,",
+        "which counts a made three as 1.5 makes. Shot creation is the share",
+        "of made shots that were unassisted."),
+      p("Overall combines efficiency, volume, shot creation and accuracy (the",
+        "zone ratings weighted by how often the player shoots from each zone),",
+        "then ranks that score against the same group of players. Tiers:",
+        "Below Average (under 30), Average (30-64), Above Average (65-89),",
+        "Elite (90+)."),
+      p("The data only include field goals, so free throws (and true shooting",
+        "percentage) are not part of the report. Games count only games in",
+        "which the player attempted a shot.")
+    )
+  )
+)
+
 ui <- page_sidebar(
   title = "NBA Shot Explorer",
   theme = bs_theme(version = 5, primary = "darkblue"),
@@ -331,7 +388,8 @@ ui <- page_sidebar(
     id = "main_tabs",
     about_tab,
     download_tab,
-    exploration_tab
+    exploration_tab,
+    report_tab
   )
 )
 
@@ -406,10 +464,11 @@ server <- function(input, output, session) {
     
     if (var2 == "none") {
       # one-way table
-      data |>
+      one_way <- data |>
         count(.data[[var1]], name = "Count") |>
-        mutate(Proportion = percent(Count / sum(Count), accuracy = 0.1)) |>
-        rename(!!var_label(var1) := 1)
+        mutate(Proportion = percent(Count / sum(Count), accuracy = 0.1))
+      names(one_way)[1] <- var_label(var1)
+      one_way
     } else {
       # two-way table: rows = var1, columns = levels of var2
       two_way <- data |>
@@ -420,12 +479,13 @@ server <- function(input, output, session) {
       if (input$cat_table_type == "row_prop") {
         totals <- rowSums(two_way[, -1])
         two_way <- two_way |>
-          mutate(across(-1, \(x) percent(x / totals, accuracy = 0.1)))
+          mutate(across(-1, function(x) percent(x / totals, accuracy = 0.1)))
       } else {
         two_way <- two_way |>
           mutate(across(-1, comma))
       }
-      rename(two_way, !!paste(var_label(var1), "/", var_label(var2)) := 1)
+      names(two_way)[1] <- paste(var_label(var1), "/", var_label(var2))
+      two_way
     }
   }, striped = TRUE, align = "l")
   
@@ -477,71 +537,62 @@ server <- function(input, output, session) {
     data <- shots_subset()
     validate(need(nrow(data) > 0, empty_data_msg))
     num_var <- input$num_var
+    group_var <- input$num_group
     fill_var <- input$num_fill
     facet_var <- input$num_facet
-    plot_type <- input$num_plot_type
     validate(need(
       fill_var == "none" || facet_var == "none" || fill_var != facet_var,
       "Choose different variables for color and facet."
     ))
     
-    if (plot_type == "box") {
-      # box plot: numeric variable across the "Summarize across" groups
-      group_var <- input$num_group
-      p <- ggplot(data, aes(x = .data[[group_var]], y = .data[[num_var]])) +
-        labs(x = var_label(group_var), y = var_label(num_var),
-             title = paste(var_label(num_var), "by", var_label_lower(group_var)))
-      if (fill_var == "none") {
-        p <- p + geom_boxplot(fill = "darkblue", alpha = 0.6, outlier.alpha = 0.05)
-      } else {
-        p <- p + geom_boxplot(aes(fill = .data[[fill_var]]), outlier.alpha = 0.05) +
-          labs(fill = var_label(fill_var))
-      }
-      zoom <- coord_cartesian(
-        ylim = if (input$num_zoom) quantile(data[[num_var]], c(0.005, 0.995)) else NULL
-      )
+    # Axis limits: the middle 99% of values when zoom is checked
+    if (input$num_zoom) {
+      limits <- quantile(data[[num_var]], c(0.005, 0.995))
     } else {
-      # x-axis limits (optionally the middle 99%) and a matching bin width
-      x_limits <- if (input$num_zoom) {
-        quantile(data[[num_var]], c(0.005, 0.995))
-      } else {
-        range(data[[num_var]])
-      }
-      bin_width <- max(1, round(diff(x_limits) / 40))
-      
-      p <- ggplot(data, aes(x = .data[[num_var]])) +
-        labs(x = var_label(num_var),
-             title = paste("Distribution of", var_label_lower(num_var)))
-      fill_aes <- if (fill_var == "none") NULL else aes(fill = .data[[fill_var]])
-      
-      if (plot_type == "hist") {
-        layer <- if (fill_var == "none") {
-          geom_histogram(binwidth = bin_width, boundary = 0,
-                         fill = "darkblue", color = "white", linewidth = 0.1)
-        } else {
-          geom_histogram(fill_aes, binwidth = bin_width, boundary = 0,
-                         color = "white", linewidth = 0.1)
-        }
-        p <- p + layer + labs(y = "Attempts") + scale_y_continuous(labels = comma)
-      } else {
-        layer <- if (fill_var == "none") {
-          geom_density(fill = "darkblue", alpha = 0.6, adjust = 1.5)
-        } else {
-          geom_density(fill_aes, alpha = 0.5, adjust = 1.5)
-        }
-        p <- p + layer + labs(y = "Density")
-      }
-      if (fill_var != "none") {
-        p <- p + labs(fill = var_label(fill_var))
-      }
-      zoom <- coord_cartesian(xlim = x_limits)
+      limits <- range(data[[num_var]])
+    }
+    
+    # Column used for the fill color ("All shots" when no color is chosen)
+    if (fill_var == "none") {
+      data$fill_group <- "All shots"
+    } else {
+      data$fill_group <- data[[fill_var]]
+    }
+    
+    if (input$num_plot_type == "hist") {
+      p <- ggplot(data, aes(x = .data[[num_var]], fill = fill_group)) +
+        geom_histogram(binwidth = max(1, round(diff(limits) / 40)),
+                       boundary = 0, color = "white", linewidth = 0.1) +
+        scale_y_continuous(labels = comma) +
+        coord_cartesian(xlim = limits) +
+        labs(title = paste("Distribution of", var_label_lower(num_var)),
+             x = var_label(num_var), y = "Attempts")
+    } else if (input$num_plot_type == "density") {
+      p <- ggplot(data, aes(x = .data[[num_var]], fill = fill_group)) +
+        geom_density(alpha = 0.5, adjust = 1.5) +
+        coord_cartesian(xlim = limits) +
+        labs(title = paste("Distribution of", var_label_lower(num_var)),
+             x = var_label(num_var), y = "Density")
+    } else {
+      # box plot of the numeric variable across the "Summarize across" groups
+      p <- ggplot(data, aes(x = .data[[group_var]], y = .data[[num_var]],
+                            fill = fill_group)) +
+        geom_boxplot(outlier.alpha = 0.05) +
+        coord_cartesian(ylim = limits) +
+        labs(title = paste(var_label(num_var), "by", var_label_lower(group_var)),
+             x = var_label(group_var), y = var_label(num_var))
     }
     
     if (facet_var != "none") {
       p <- p + facet_wrap(vars(.data[[facet_var]]))
     }
     
-    p + zoom + scale_fill_brewer(palette = "Dark2") + plot_theme
+    p <- p + plot_theme
+    if (fill_var == "none") {
+      p + scale_fill_manual(values = "darkblue") + theme(legend.position = "none")
+    } else {
+      p + scale_fill_brewer(palette = "Dark2") + labs(fill = var_label(fill_var))
+    }
   })
   
   # -- Data Exploration: shooting by distance ------------------------------------
@@ -552,11 +603,17 @@ server <- function(input, output, session) {
     color_var <- input$dist_color
     metric <- input$dist_metric
     
-    group_vars <- c("shot_dist", if (color_var != "none") color_var)
+    # Column used for point color ("All shots" when no color is chosen)
+    if (color_var == "none") {
+      data$color_group <- "All shots"
+    } else {
+      data$color_group <- data[[color_var]]
+    }
+    
     by_dist <- data |>
       filter(shot_dist <= input$dist_max) |>
       mutate(points = shot_points(shot_value, made)) |>
-      group_by(across(all_of(group_vars))) |>
+      group_by(shot_dist, color_group) |>
       summarise(
         attempts = n(),
         fg_pct = mean(made),
@@ -570,13 +627,13 @@ server <- function(input, output, session) {
       "No distance has enough attempts. Lower the minimum attempts or widen the filters."
     ))
     
-    p <- ggplot(by_dist, aes(x = shot_dist, y = .data[[metric]]))
+    p <- ggplot(by_dist, aes(x = shot_dist, y = .data[[metric]],
+                             color = color_group, size = attempts)) +
+      geom_point(alpha = 0.8)
     if (color_var == "none") {
-      p <- p + geom_point(aes(size = attempts), color = "darkblue", alpha = 0.8)
+      p <- p + scale_color_manual(values = "darkblue", guide = "none")
     } else {
-      p <- p + geom_point(aes(size = attempts, color = .data[[color_var]]),
-                          alpha = 0.8) +
-        scale_color_brewer(palette = "Dark2") +
+      p <- p + scale_color_brewer(palette = "Dark2") +
         labs(color = var_label(color_var))
     }
     
@@ -616,7 +673,7 @@ server <- function(input, output, session) {
         fg_pct       = mean(made),
         pts_per_shot = mean(points),
         avg_dist     = mean(shot_dist),
-        ast_rate     = if (any(made)) mean(assisted[made] == "Assisted") else NA_real_,
+        ast_rate     = sum(made & assisted == "Assisted") / sum(made),
         .groups = "drop"
       ) |>
       mutate(row_level = fct_reorder(.data[[row_var]], .data[[metric]],
@@ -648,6 +705,38 @@ server <- function(input, output, session) {
                          size = 3.5)
     }
     p
+  })
+  
+  # -- Shooting Report ----------------------------------------------------------------
+  
+  # Players on the chosen team and season, most attempts first
+  observeEvent(list(input$report_season, input$report_team), {
+    roster <- player_stints |>
+      filter(season == input$report_season,
+             shooting_team == input$report_team) |>
+      arrange(desc(fga))
+    choices <- setNames(roster$shooter_id,
+                        paste0(roster$shooter, " (", comma(roster$fga), " FGA)"))
+    updateSelectInput(session, "report_player", choices = choices)
+  })
+  
+  selected_player <- reactive({
+    req(input$report_player)
+    player <- player_stints |>
+      filter(season == input$report_season,
+             shooting_team == input$report_team,
+             shooter_id == input$report_player)
+    # the player list can lag a moment behind a team change
+    req(nrow(player) == 1)
+    player
+  })
+  
+  output$player_card <- renderUI({
+    player_card(selected_player())
+  })
+  
+  output$player_profile <- renderPlot({
+    profile_plot(selected_player(), league_zones)
   })
 }
 
