@@ -8,6 +8,8 @@
 library(shiny)
 library(bslib)
 library(dplyr)
+library(tidyr)
+library(ggplot2)
 library(readr)
 library(scales)
 library(DT)
@@ -20,6 +22,17 @@ shots <- read_rds("data/nba_shots.rds")
 # ---- Variable lookups ---------------------------------------------------------
 # Named vectors: names are the labels shown to the user, values are columns.
 
+cat_vars <- c(
+  "Season"       = "season",
+  "Game type"    = "game_type",
+  "Period"       = "period",
+  "Home / away"  = "shooting_side",
+  "Shot value"   = "shot_value",
+  "Shot kind"    = "shot_kind",
+  "Outcome"      = "outcome",
+  "Assisted"     = "assisted"
+)
+
 num_vars <- c(
   "Shot distance (ft)"     = "shot_dist",
   "Score margin (pts)"     = "score_margin",
@@ -30,7 +43,7 @@ none_choice <- c("None" = "none")
 
 # Return the display label for a column name
 var_label <- function(var) {
-  all_labels <- num_vars
+  all_labels <- c(cat_vars, num_vars)
   names(all_labels)[match(var, all_labels)]
 }
 
@@ -62,6 +75,11 @@ make_range_slider <- function(id, var) {
     value = var_range, step = 1
   )
 }
+
+plot_theme <- theme_minimal(base_size = 14) +
+  theme(legend.position = "bottom", plot.title = element_text(face = "bold"))
+
+empty_data_msg <- "No shots match the current filters. Widen the sidebar filters and press Apply."
 
 # ---- UI -----------------------------------------------------------------------
 
@@ -159,9 +177,34 @@ download_tab <- nav_panel(
   )
 )
 
+categorical_panel <- nav_panel(
+  "Categorical",
+  layout_sidebar(
+    sidebar = sidebar(
+      width = 260,
+      selectInput("cat_var1", "Variable", choices = cat_vars,
+                  selected = "season"),
+      selectInput("cat_var2", "Second variable (two-way table)",
+                  choices = c(none_choice, cat_vars), selected = "shot_value"),
+      radioButtons("cat_table_type", "Table shows",
+                   choices = c("Counts" = "count",
+                               "Row proportions" = "row_prop")),
+      radioButtons("cat_position", "Bar position",
+                   choices = c("Side-by-side" = "dodge",
+                               "Stacked" = "stack",
+                               "Proportion (filled)" = "fill"))
+    ),
+    plotOutput("cat_plot", height = "420px") |> withSpinner(),
+    h5("Contingency table"),
+    tableOutput("cat_table")
+  )
+)
+
 exploration_tab <- nav_panel(
   "Data Exploration",
-  p("Coming soon.")
+  navset_card_pill(
+    categorical_panel
+  )
 )
 
 ui <- page_sidebar(
@@ -235,6 +278,76 @@ server <- function(input, output, session) {
       write_csv(shots_subset(), file)
     }
   )
+  
+  # -- Data Exploration: categorical ---------------------------------------------
+  
+  output$cat_table <- renderTable({
+    data <- shots_subset()
+    validate(need(nrow(data) > 0, empty_data_msg))
+    var1 <- input$cat_var1
+    var2 <- input$cat_var2
+    validate(need(var1 != var2, "Choose two different variables."))
+    
+    if (var2 == "none") {
+      # one-way table
+      data |>
+        count(.data[[var1]], name = "Count") |>
+        mutate(Proportion = percent(Count / sum(Count), accuracy = 0.1)) |>
+        rename(!!var_label(var1) := 1)
+    } else {
+      # two-way table: rows = var1, columns = levels of var2
+      two_way <- data |>
+        count(.data[[var1]], .data[[var2]]) |>
+        pivot_wider(names_from = all_of(var2), values_from = n,
+                    values_fill = 0)
+      
+      if (input$cat_table_type == "row_prop") {
+        totals <- rowSums(two_way[, -1])
+        two_way <- two_way |>
+          mutate(across(-1, \(x) percent(x / totals, accuracy = 0.1)))
+      } else {
+        two_way <- two_way |>
+          mutate(across(-1, comma))
+      }
+      rename(two_way, !!paste(var_label(var1), "/", var_label(var2)) := 1)
+    }
+  }, striped = TRUE, align = "l")
+  
+  output$cat_plot <- renderPlot({
+    data <- shots_subset()
+    validate(need(nrow(data) > 0, empty_data_msg))
+    var1 <- input$cat_var1
+    var2 <- input$cat_var2
+    validate(need(var1 != var2, "Choose two different variables."))
+    
+    if (var2 == "none") {
+      p <- ggplot(data, aes(x = .data[[var1]])) +
+        geom_bar(fill = "darkblue") +
+        labs(title = paste("Shot attempts by", var_label_lower(var1)))
+    } else {
+      p <- ggplot(data, aes(x = .data[[var1]], fill = .data[[var2]])) +
+        geom_bar(position = input$cat_position) +
+        scale_fill_brewer(palette = "Dark2") +
+        labs(
+          title = paste("Shot attempts by", var_label_lower(var1), "and",
+                        var_label_lower(var2)),
+          fill = var_label(var2)
+        )
+    }
+    
+    y_scale <- if (var2 != "none" && input$cat_position == "fill") {
+      scale_y_continuous(labels = percent)
+    } else {
+      scale_y_continuous(labels = comma)
+    }
+    y_label <- if (var2 != "none" && input$cat_position == "fill") {
+      "Proportion of attempts"
+    } else {
+      "Attempts"
+    }
+    
+    p + y_scale + labs(x = var_label(var1), y = y_label) + plot_theme
+  })
 }
 
 shinyApp(ui, server)
