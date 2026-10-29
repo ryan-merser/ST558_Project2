@@ -10,6 +10,8 @@ library(bslib)
 library(dplyr)
 library(readr)
 library(scales)
+library(DT)
+library(shinycssloaders)
 
 # ---- Data ---------------------------------------------------------------------
 
@@ -147,7 +149,14 @@ about_tab <- nav_panel(
 
 download_tab <- nav_panel(
   "Data Download",
-  p("Coming soon.")
+  card(
+    card_header(
+      class = "d-flex justify-content-between align-items-center",
+      "Filtered shot data",
+      downloadButton("download_data", "Download CSV", class = "btn-sm")
+    ),
+    DT::dataTableOutput("data_table") |> withSpinner()
+  )
 )
 
 exploration_tab <- nav_panel(
@@ -210,6 +219,22 @@ server <- function(input, output, session) {
   output$n_shots <- renderText({
     paste("Current data:", comma(nrow(shots_subset())), "shots")
   })
+  
+  # -- Data Download tab ----------------------------------------------------------
+  
+  output$data_table <- DT::renderDataTable({
+    shots_subset()
+  }, rownames = FALSE, class = "compact stripe nowrap",
+  options = list(pageLength = 10, scrollX = TRUE))
+  
+  output$download_data <- downloadHandler(
+    filename = function() {
+      paste0("nba_shots_subset_", Sys.Date(), ".csv")
+    },
+    content = function(file) {
+      write_csv(shots_subset(), file)
+    }
+  )
 }
 
 shinyApp(ui, server)
