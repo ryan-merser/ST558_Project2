@@ -14,20 +14,23 @@ Data
 The data come from the NBA Play-by-Play Data set on Kaggle, scraped from Basketball-Reference. data_prep.R reduces the raw play-by-play files (about 130 MB per season) to one row per field-goal attempt. The result is saved as data/nba_shots.rds (about 6 MB). Free throws are not included.
 
 App layout
+
 Sidebar: subset the data by season, team, game type and shot value, plus two numeric variables with range sliders. Changes take effect when you press Apply filters.
 About: the app's purpose, the data source and how to use each tab.
 Data Download: view the filtered data and save it as a CSV.
 Data Exploration: contingency tables and bar charts, numeric summaries with histograms, density plots and box plots, FG% by shot distance, and a heatmap comparing any two categorical variables.
 Shooting Report: pick a season, team and player to get a player card. It rates their shooting against the rest of the league, gives a playstyle label based on where they shoot, and compares their shot mix with the league average.
+
 Files
-File	Description
-app.R	The Shiny app
-player_report.R	Helper functions for the Shooting Report tab
-data_prep.R	Reduces the raw Kaggle CSVs to data/nba_shots.rds
-eda.qmd	Static exploratory analysis done before building the app
-make_court_image.R	Creates the court image on the About tab (www/court_fg.png)
+
+app.R:	The Shiny app
+player_report.R:	Helper functions for the Shooting Report tab
+data_prep.R:	Reduces the raw Kaggle CSVs to data/nba_shots.rds
+eda.qmd:	Static exploratory analysis done before building the app
+make_court_image.R:	Creates the court image on the About tab (www/court_fg.png)
+
 Running locally
-r
+
 install.packages(c("shiny", "bslib", "dplyr", "tidyr", "forcats", "ggplot2",
                    "readr", "scales", "DT", "shinycssloaders", "purrr", "tibble"))
 shiny::runApp()
