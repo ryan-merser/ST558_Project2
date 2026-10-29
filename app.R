@@ -9,6 +9,7 @@ library(shiny)
 library(bslib)
 library(dplyr)
 library(tidyr)
+library(forcats)
 library(ggplot2)
 library(readr)
 library(scales)
@@ -33,17 +34,29 @@ cat_vars <- c(
   "Assisted"     = "assisted"
 )
 
+# The heatmap can also use team, which has too many levels for the other plots
+heat_cat_vars <- c("Shooting team" = "shooting_team", cat_vars)
+
 num_vars <- c(
   "Shot distance (ft)"     = "shot_dist",
   "Score margin (pts)"     = "score_margin",
   "Seconds left in period" = "sec_left_period"
 )
 
+heat_metrics <- c(
+  "3-pt attempt rate"          = "three_rate",
+  "FG%"                        = "fg_pct",
+  "Points per shot"            = "pts_per_shot",
+  "Average shot distance (ft)" = "avg_dist",
+  "Assisted rate (made shots)" = "ast_rate",
+  "Attempts"                   = "attempts"
+)
+
 none_choice <- c("None" = "none")
 
 # Return the display label for a column name
 var_label <- function(var) {
-  all_labels <- c(cat_vars, num_vars)
+  all_labels <- c(heat_cat_vars, num_vars, heat_metrics)
   names(all_labels)[match(var, all_labels)]
 }
 
@@ -78,6 +91,23 @@ summarize_numeric <- function(data, num_var, group_var) {
       .groups = "drop"
     ) |>
     rename(!!var_label(group_var) := 1)
+}
+
+# Points scored on each attempt (0 for a miss)
+shot_points <- function(shot_value, made) {
+  if_else(shot_value == "3-pt", 3, 2) * made
+}
+
+# Format a heatmap metric for tile labels
+format_metric <- function(x, metric) {
+  labels <- switch(
+    metric,
+    attempts     = comma(x),
+    avg_dist     = number(x, accuracy = 0.1),
+    pts_per_shot = number(x, accuracy = 0.01),
+    percent(x, accuracy = 1)
+  )
+  if_else(is.na(x), "", labels)
 }
 
 # Range slider for a chosen numeric variable (used by the dynamic UI)
@@ -243,11 +273,53 @@ numeric_panel <- nav_panel(
   )
 )
 
+distance_panel <- nav_panel(
+  "Shooting by Distance",
+  layout_sidebar(
+    sidebar = sidebar(
+      width = 260,
+      radioButtons("dist_metric", "Y-axis",
+                   choices = c("FG%" = "fg_pct",
+                               "Points per shot" = "pts_per_shot")),
+      selectInput("dist_color", "Color by",
+                  choices = c(none_choice, cat_vars), selected = "shot_value"),
+      sliderInput("dist_max", "Maximum distance (ft)",
+                  min = 10, max = 60, value = 35, step = 1),
+      sliderInput("dist_min_n", "Minimum attempts per point",
+                  min = 10, max = 1000, value = 100, step = 10)
+    ),
+    plotOutput("dist_plot", height = "520px") |> withSpinner(),
+    p(class = "text-muted small",
+      "Each point is one distance (rounded to the foot) for one group, sized by",
+      "the number of attempts. Points with fewer attempts than the minimum",
+      "are hidden because their percentages are too noisy.")
+  )
+)
+
+heatmap_panel <- nav_panel(
+  "Heatmap",
+  layout_sidebar(
+    sidebar = sidebar(
+      width = 260,
+      selectInput("heat_rows", "Rows", choices = heat_cat_vars,
+                  selected = "shooting_team"),
+      selectInput("heat_cols", "Columns", choices = heat_cat_vars,
+                  selected = "season"),
+      selectInput("heat_metric", "Fill", choices = heat_metrics,
+                  selected = "three_rate"),
+      checkboxInput("heat_labels", "Show values on tiles", value = TRUE)
+    ),
+    plotOutput("heat_plot", height = "720px") |> withSpinner()
+  )
+)
+
 exploration_tab <- nav_panel(
   "Data Exploration",
   navset_card_pill(
     categorical_panel,
-    numeric_panel
+    numeric_panel,
+    distance_panel,
+    heatmap_panel
   )
 )
 
@@ -470,6 +542,112 @@ server <- function(input, output, session) {
     }
     
     p + zoom + scale_fill_brewer(palette = "Dark2") + plot_theme
+  })
+  
+  # -- Data Exploration: shooting by distance ------------------------------------
+  
+  output$dist_plot <- renderPlot({
+    data <- shots_subset()
+    validate(need(nrow(data) > 0, empty_data_msg))
+    color_var <- input$dist_color
+    metric <- input$dist_metric
+    
+    group_vars <- c("shot_dist", if (color_var != "none") color_var)
+    by_dist <- data |>
+      filter(shot_dist <= input$dist_max) |>
+      mutate(points = shot_points(shot_value, made)) |>
+      group_by(across(all_of(group_vars))) |>
+      summarise(
+        attempts = n(),
+        fg_pct = mean(made),
+        pts_per_shot = mean(points),
+        .groups = "drop"
+      ) |>
+      filter(attempts >= input$dist_min_n)
+    
+    validate(need(
+      nrow(by_dist) > 0,
+      "No distance has enough attempts. Lower the minimum attempts or widen the filters."
+    ))
+    
+    p <- ggplot(by_dist, aes(x = shot_dist, y = .data[[metric]]))
+    if (color_var == "none") {
+      p <- p + geom_point(aes(size = attempts), color = "darkblue", alpha = 0.8)
+    } else {
+      p <- p + geom_point(aes(size = attempts, color = .data[[color_var]]),
+                          alpha = 0.8) +
+        scale_color_brewer(palette = "Dark2") +
+        labs(color = var_label(color_var))
+    }
+    
+    y_scale <- if (metric == "fg_pct") {
+      scale_y_continuous(labels = percent)
+    } else {
+      scale_y_continuous(labels = number_format(accuracy = 0.1))
+    }
+    y_label <- if (metric == "fg_pct") "FG%" else "Points per shot"
+    
+    p + y_scale +
+      scale_size_continuous(labels = comma, range = c(1, 8)) +
+      labs(
+        title = paste(y_label, "by shot distance"),
+        x = "Shot distance (ft)", y = y_label, size = "Attempts"
+      ) +
+      plot_theme +
+      theme(legend.box = "vertical")
+  })
+  
+  # -- Data Exploration: heatmap ---------------------------------------------------
+  
+  output$heat_plot <- renderPlot({
+    data <- shots_subset()
+    validate(need(nrow(data) > 0, empty_data_msg))
+    row_var <- input$heat_rows
+    col_var <- input$heat_cols
+    metric <- input$heat_metric
+    validate(need(row_var != col_var, "Choose different variables for rows and columns."))
+    
+    heat_data <- data |>
+      mutate(points = shot_points(shot_value, made)) |>
+      group_by(.data[[row_var]], .data[[col_var]]) |>
+      summarise(
+        attempts     = n(),
+        three_rate   = mean(shot_value == "3-pt"),
+        fg_pct       = mean(made),
+        pts_per_shot = mean(points),
+        avg_dist     = mean(shot_dist),
+        ast_rate     = if (any(made)) mean(assisted[made] == "Assisted") else NA_real_,
+        .groups = "drop"
+      ) |>
+      mutate(row_level = fct_reorder(.data[[row_var]], .data[[metric]],
+                                     .fun = mean, na.rm = TRUE))
+    
+    fill_labels <- if (metric %in% c("attempts", "avg_dist", "pts_per_shot")) {
+      label_number(accuracy = if (metric == "attempts") 1 else 0.1, big.mark = ",")
+    } else {
+      label_percent(accuracy = 1)
+    }
+    
+    p <- ggplot(heat_data, aes(x = .data[[col_var]], y = row_level,
+                               fill = .data[[metric]])) +
+      geom_tile(color = "white") +
+      scale_fill_gradient(low = "grey", high = "red",
+                          labels = fill_labels, na.value = "grey") +
+      labs(
+        title = paste(var_label(metric), "by", var_label_lower(row_var),
+                      "and", var_label_lower(col_var)),
+        subtitle = paste("Rows ordered by their average", var_label_lower(metric)),
+        x = var_label(col_var), y = var_label(row_var),
+        fill = var_label(metric)
+      ) +
+      plot_theme +
+      theme(panel.grid = element_blank(), legend.key.width = unit(1.5, "cm"))
+    
+    if (input$heat_labels) {
+      p <- p + geom_text(aes(label = format_metric(.data[[metric]], metric)),
+                         size = 3.5)
+    }
+    p
   })
 }
 
