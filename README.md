@@ -3,7 +3,7 @@ NBA Shot Explorer
 
 ST558 Project 2: a Shiny app for exploring every field-goal attempt from five NBA seasons (2015-16 through 2019-20), a little over one million shots.
 
-Live app: 
+Live app: [https://01a1862c-c1dc-fd11-fa2f-2fabeceb6710.share.connect.posit.cloud/]
 
 Purpose
 
