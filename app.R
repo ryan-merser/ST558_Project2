@@ -62,6 +62,24 @@ filter_numeric <- function(data, var, range) {
   filter(data, between(.data[[var]], range[1], range[2]))
 }
 
+# Summary statistics of one numeric variable at each level of a categorical one
+summarize_numeric <- function(data, num_var, group_var) {
+  data |>
+    group_by(.data[[group_var]]) |>
+    summarise(
+      n      = n(),
+      mean   = mean(.data[[num_var]], na.rm = TRUE),
+      median = median(.data[[num_var]], na.rm = TRUE),
+      sd     = sd(.data[[num_var]], na.rm = TRUE),
+      min    = min(.data[[num_var]], na.rm = TRUE),
+      q1     = quantile(.data[[num_var]], 0.25, na.rm = TRUE),
+      q3     = quantile(.data[[num_var]], 0.75, na.rm = TRUE),
+      max    = max(.data[[num_var]], na.rm = TRUE),
+      .groups = "drop"
+    ) |>
+    rename(!!var_label(group_var) := 1)
+}
+
 # Range slider for a chosen numeric variable (used by the dynamic UI)
 make_range_slider <- function(id, var) {
   if (is.null(var) || var == "none") {
@@ -200,10 +218,36 @@ categorical_panel <- nav_panel(
   )
 )
 
+numeric_panel <- nav_panel(
+  "Numeric",
+  layout_sidebar(
+    sidebar = sidebar(
+      width = 260,
+      selectInput("num_var", "Numeric variable", choices = num_vars,
+                  selected = "shot_dist"),
+      selectInput("num_group", "Summarize across", choices = cat_vars,
+                  selected = "season"),
+      radioButtons("num_plot_type", "Plot type",
+                   choices = c("Histogram" = "hist", "Density" = "density",
+                               "Box plot" = "box")),
+      selectInput("num_fill", "Color by", choices = c(none_choice, cat_vars),
+                  selected = "shot_value"),
+      selectInput("num_facet", "Facet by", choices = c(none_choice, cat_vars),
+                  selected = "season"),
+      checkboxInput("num_zoom", "Zoom to the middle 99% of values",
+                    value = TRUE)
+    ),
+    plotOutput("num_plot", height = "520px") |> withSpinner(),
+    h5("Summary statistics"),
+    tableOutput("num_table")
+  )
+)
+
 exploration_tab <- nav_panel(
   "Data Exploration",
   navset_card_pill(
-    categorical_panel
+    categorical_panel,
+    numeric_panel
   )
 )
 
@@ -347,6 +391,85 @@ server <- function(input, output, session) {
     }
     
     p + y_scale + labs(x = var_label(var1), y = y_label) + plot_theme
+  })
+  
+  # -- Data Exploration: numeric --------------------------------------------------
+  
+  output$num_table <- renderTable({
+    data <- shots_subset()
+    validate(need(nrow(data) > 0, empty_data_msg))
+    summarize_numeric(data, input$num_var, input$num_group)
+  }, striped = TRUE, digits = 2)
+  
+  output$num_plot <- renderPlot({
+    data <- shots_subset()
+    validate(need(nrow(data) > 0, empty_data_msg))
+    num_var <- input$num_var
+    fill_var <- input$num_fill
+    facet_var <- input$num_facet
+    plot_type <- input$num_plot_type
+    validate(need(
+      fill_var == "none" || facet_var == "none" || fill_var != facet_var,
+      "Choose different variables for color and facet."
+    ))
+    
+    if (plot_type == "box") {
+      # box plot: numeric variable across the "Summarize across" groups
+      group_var <- input$num_group
+      p <- ggplot(data, aes(x = .data[[group_var]], y = .data[[num_var]])) +
+        labs(x = var_label(group_var), y = var_label(num_var),
+             title = paste(var_label(num_var), "by", var_label_lower(group_var)))
+      if (fill_var == "none") {
+        p <- p + geom_boxplot(fill = "darkblue", alpha = 0.6, outlier.alpha = 0.05)
+      } else {
+        p <- p + geom_boxplot(aes(fill = .data[[fill_var]]), outlier.alpha = 0.05) +
+          labs(fill = var_label(fill_var))
+      }
+      zoom <- coord_cartesian(
+        ylim = if (input$num_zoom) quantile(data[[num_var]], c(0.005, 0.995)) else NULL
+      )
+    } else {
+      # x-axis limits (optionally the middle 99%) and a matching bin width
+      x_limits <- if (input$num_zoom) {
+        quantile(data[[num_var]], c(0.005, 0.995))
+      } else {
+        range(data[[num_var]])
+      }
+      bin_width <- max(1, round(diff(x_limits) / 40))
+      
+      p <- ggplot(data, aes(x = .data[[num_var]])) +
+        labs(x = var_label(num_var),
+             title = paste("Distribution of", var_label_lower(num_var)))
+      fill_aes <- if (fill_var == "none") NULL else aes(fill = .data[[fill_var]])
+      
+      if (plot_type == "hist") {
+        layer <- if (fill_var == "none") {
+          geom_histogram(binwidth = bin_width, boundary = 0,
+                         fill = "darkblue", color = "white", linewidth = 0.1)
+        } else {
+          geom_histogram(fill_aes, binwidth = bin_width, boundary = 0,
+                         color = "white", linewidth = 0.1)
+        }
+        p <- p + layer + labs(y = "Attempts") + scale_y_continuous(labels = comma)
+      } else {
+        layer <- if (fill_var == "none") {
+          geom_density(fill = "darkblue", alpha = 0.6, adjust = 1.5)
+        } else {
+          geom_density(fill_aes, alpha = 0.5, adjust = 1.5)
+        }
+        p <- p + layer + labs(y = "Density")
+      }
+      if (fill_var != "none") {
+        p <- p + labs(fill = var_label(fill_var))
+      }
+      zoom <- coord_cartesian(xlim = x_limits)
+    }
+    
+    if (facet_var != "none") {
+      p <- p + facet_wrap(vars(.data[[facet_var]]))
+    }
+    
+    p + zoom + scale_fill_brewer(palette = "Dark2") + plot_theme
   })
 }
 
